@@ -10,11 +10,11 @@ import aiohttp
 TOKEN = os.getenv("TOKEN")
 
 WATERMARK_TEXT       = "DLP WORKS"       # Texte watermark
-WATERMARK_OPACITY    = 35                # 0=invisible, 100=opaque (recommandé: 15-30)
+WATERMARK_OPACITY    = 0                # 0=invisible, 100=opaque (recommandé: 15-30)
 WATERMARK_FONT_SIZE  = 80               # Taille du texte watermark
 
 LOGO_FILE            = "logo.png"        # Fichier de ton logo
-LOGO_SIZE_PERCENT    = 14               # Taille du logo en % de la largeur de l'image
+LOGO_SIZE_PERCENT    = 12               # Taille du logo en % de la largeur de l'image
 LOGO_MARGIN          = 20               # Marge depuis le bord (pixels)
 
 OUTPUT_QUALITY       = 100               # Qualité JPEG export (95-100 pour HDR)
