@@ -94,13 +94,29 @@ def add_watermark(image_bytes: bytes) -> bytes:
         except Exception as e:
             print(f"⚠️ ERREUR LOGO : impossible de traiter le logo → {e}")
 
-    # ── EXPORT ──
+# ── EXPORT avec compression automatique si trop lourd ──
+    img_rgb = img.convert("RGB")
+    
+    for qualite in [OUTPUT_QUALITY, 85, 75, 65]:
+        output = io.BytesIO()
+        img_rgb.save(output, format="JPEG", quality=qualite, subsampling=0, optimize=True)
+        taille = output.tell()
+        print(f"📦 Taille export : {taille // 1024} Ko (qualité {qualite})")
+        
+        if taille < 7 * 1024 * 1024:  # Sous 7 Mo → OK pour Discord
+            output.seek(0)
+            return output.read()
+        
+        print(f"⚠️ Trop lourd ({taille // 1024 // 1024} Mo), compression accrue...")
+
+    # Si toujours trop lourd → réduction de la résolution
+    print("📐 Image encore trop lourde → réduction de la résolution à 50%")
+    w, h = img_rgb.size
+    img_rgb = img_rgb.resize((w // 2, h // 2), Image.LANCZOS)
     output = io.BytesIO()
-    img.convert("RGB").save(output, format="JPEG", quality=OUTPUT_QUALITY, subsampling=0)
+    img_rgb.save(output, format="JPEG", quality=75, optimize=True)
     output.seek(0)
     return output.read()
-
-
 async def telecharger_image(session, url, nom_fichier, tentative=1):
     """Télécharge une image avec retry automatique si connexion lente."""
     try:
