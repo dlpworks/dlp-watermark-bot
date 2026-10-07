@@ -34,37 +34,41 @@ ssl_context = ssl.create_default_context(cafile=certifi.where())
 def add_logo(image_bytes: bytes) -> bytes:
     img_original = Image.open(io.BytesIO(image_bytes))
 
-    # Préserver le profil couleur ICC (crucial pour photos HDR iPhone)
-    icc_profile = img_original.info.get("icc_profile")
+    # Convertir en sRGB standard (résout le problème de saturation P3 iPhone)
+    try:
+        import PIL.ImageCms as ImageCms
+        srgb_profile = ImageCms.createProfile("sRGB")
+        if img_original.mode == "RGB":
+            icc_data = img_original.info.get("icc_profile")
+            if icc_data:
+                src_profile = ImageCms.ImageCmsProfile(io.BytesIO(icc_data))
+                img_original = ImageCms.profileToProfile(img_original, src_profile, srgb_profile)
+                print("🎨 Conversion P3 → sRGB effectuée")
+    except Exception as e:
+        print(f"⚠️ Conversion couleur ignorée : {e}")
+
     img = img_original.convert("RGBA")
     width, height = img.size
 
-        # ── LOGO BAS DROITE ──
+    # ── LOGO BAS DROITE ──
     if os.path.exists(LOGO_FILE):
         try:
-            logo_original = Image.open(LOGO_FILE).convert("RGBA")
-            
-            # Convertir le logo en sRGB standard pour éviter le décalage couleur
-            logo_original = logo_original.convert("RGB").convert("RGBA")
-            
+            logo = Image.open(LOGO_FILE).convert("RGBA")
             logo_width = int(width * LOGO_SIZE_PERCENT / 100)
-            logo_ratio = logo_width / logo_original.size[0]
-            logo_height = int(logo_original.size[1] * logo_ratio)
-            logo_resized = logo_original.resize((logo_width, logo_height), Image.LANCZOS)
+            logo_ratio = logo_width / logo.size[0]
+            logo_height = int(logo.size[1] * logo_ratio)
+            logo = logo.resize((logo_width, logo_height), Image.LANCZOS)
             pos_x = width - logo_width - LOGO_MARGIN
             pos_y = height - logo_height - LOGO_MARGIN
-            img.paste(logo_resized, (pos_x, pos_y), logo_resized)
+            img.paste(logo, (pos_x, pos_y), logo)
         except FileNotFoundError:
             print("⚠️ ERREUR LOGO : fichier logo.png introuvable")
         except Exception as e:
             print(f"⚠️ ERREUR LOGO : {e}")
 
-    # ── EXPORT avec compression automatique ──
+    # ── EXPORT sans profil ICC (sRGB universel) ──
     img_rgb = img.convert("RGB")
     save_kwargs = {"format": "JPEG", "subsampling": 0, "optimize": True}
-    if icc_profile:
-        save_kwargs["icc_profile"] = icc_profile
-        print("🎨 Profil couleur ICC préservé")
 
     for qualite in [OUTPUT_QUALITY, 85, 75, 65]:
         output = io.BytesIO()
@@ -76,7 +80,6 @@ def add_logo(image_bytes: bytes) -> bytes:
             return output.read()
         print(f"⚠️ Trop lourd ({taille // 1024 // 1024} Mo), compression accrue...")
 
-    # Si toujours trop lourd → réduction résolution
     print("📐 Image trop lourde → réduction résolution à 50%")
     w, h = img_rgb.size
     img_rgb = img_rgb.resize((w // 2, h // 2), Image.LANCZOS)
