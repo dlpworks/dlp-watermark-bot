@@ -2,7 +2,7 @@ import discord
 import io
 import os
 import traceback
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
 import aiohttp
 import certifi
 import ssl
@@ -13,18 +13,14 @@ import asyncio
 # ──────────────────────────────────────────
 TOKEN = os.getenv("TOKEN")
 
-WATERMARK_TEXT      = "DLP WORKS"
-WATERMARK_OPACITY   = 0
-WATERMARK_FONT_SIZE = 80
-
 LOGO_FILE           = "logo.png"
 LOGO_SIZE_PERCENT   = 11
 LOGO_MARGIN         = 20
 
 OUTPUT_QUALITY      = 100
 
-TIMEOUT_SECONDES    = 60    # Délai max pour télécharger une image
-MAX_RETRIES         = 3     # Nombre de tentatives si échec réseau
+TIMEOUT_SECONDES    = 60
+MAX_RETRIES         = 3
 # ──────────────────────────────────────────
 
 intents = discord.Intents.default()
@@ -35,48 +31,13 @@ client = discord.Client(intents=intents)
 ssl_context = ssl.create_default_context(cafile=certifi.where())
 
 
-def add_watermark(image_bytes: bytes) -> bytes:
-    img = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
+def add_logo(image_bytes: bytes) -> bytes:
+    img_original = Image.open(io.BytesIO(image_bytes))
+
+    # Préserver le profil couleur ICC (crucial pour photos HDR iPhone)
+    icc_profile = img_original.info.get("icc_profile")
+    img = img_original.convert("RGBA")
     width, height = img.size
-
-    # ── WATERMARK TEXTE ──
-    txt_layer = Image.new("RGBA", img.size, (255, 255, 255, 0))
-    draw = ImageDraw.Draw(txt_layer)
-
-    font = None
-    for font_path in [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-        "/System/Library/Fonts/Helvetica.ttc",
-        "arial.ttf",
-    ]:
-        try:
-            font = ImageFont.truetype(font_path, WATERMARK_FONT_SIZE)
-            break
-        except:
-            continue
-    if font is None:
-        font = ImageFont.load_default()
-
-    bbox = draw.textbbox((0, 0), WATERMARK_TEXT, font=font)
-    txt_w = bbox[2] - bbox[0]
-    txt_h = bbox[3] - bbox[1]
-
-    padding = 20
-    txt_img = Image.new("RGBA", (txt_w + padding*2, txt_h + padding*2), (255, 255, 255, 0))
-    txt_draw = ImageDraw.Draw(txt_img)
-    txt_draw.text(
-        (padding, padding), WATERMARK_TEXT, font=font,
-        fill=(180, 180, 180, int(255 * WATERMARK_OPACITY / 100))
-    )
-
-    txt_rotated = txt_img.rotate(30, expand=True)
-    tw, th = txt_rotated.size
-    for y in range(-th, height + th, th + 60):
-        for x in range(-tw, width + tw, tw + 40):
-            txt_layer.paste(txt_rotated, (x, y), txt_rotated)
-
-    img = Image.alpha_composite(img, txt_layer)
 
     # ── LOGO BAS DROITE ──
     if os.path.exists(LOGO_FILE):
@@ -90,35 +51,38 @@ def add_watermark(image_bytes: bytes) -> bytes:
             pos_y = height - logo_height - LOGO_MARGIN
             img.paste(logo, (pos_x, pos_y), logo)
         except FileNotFoundError:
-            print("⚠️ ERREUR LOGO : fichier logo.png introuvable dans le dossier du bot")
+            print("⚠️ ERREUR LOGO : fichier logo.png introuvable")
         except Exception as e:
-            print(f"⚠️ ERREUR LOGO : impossible de traiter le logo → {e}")
+            print(f"⚠️ ERREUR LOGO : {e}")
 
-# ── EXPORT avec compression automatique si trop lourd ──
+    # ── EXPORT avec compression automatique ──
     img_rgb = img.convert("RGB")
-    
+    save_kwargs = {"format": "JPEG", "subsampling": 0, "optimize": True}
+    if icc_profile:
+        save_kwargs["icc_profile"] = icc_profile
+        print("🎨 Profil couleur ICC préservé")
+
     for qualite in [OUTPUT_QUALITY, 85, 75, 65]:
         output = io.BytesIO()
-        img_rgb.save(output, format="JPEG", quality=qualite, subsampling=0, optimize=True)
+        img_rgb.save(output, quality=qualite, **save_kwargs)
         taille = output.tell()
         print(f"📦 Taille export : {taille // 1024} Ko (qualité {qualite})")
-        
-        if taille < 7 * 1024 * 1024:  # Sous 7 Mo → OK pour Discord
+        if taille < 7 * 1024 * 1024:
             output.seek(0)
             return output.read()
-        
         print(f"⚠️ Trop lourd ({taille // 1024 // 1024} Mo), compression accrue...")
 
-    # Si toujours trop lourd → réduction de la résolution
-    print("📐 Image encore trop lourde → réduction de la résolution à 50%")
+    # Si toujours trop lourd → réduction résolution
+    print("📐 Image trop lourde → réduction résolution à 50%")
     w, h = img_rgb.size
     img_rgb = img_rgb.resize((w // 2, h // 2), Image.LANCZOS)
     output = io.BytesIO()
-    img_rgb.save(output, format="JPEG", quality=75, optimize=True)
+    img_rgb.save(output, quality=75, **save_kwargs)
     output.seek(0)
     return output.read()
+
+
 async def telecharger_image(session, url, nom_fichier, tentative=1):
-    """Télécharge une image avec retry automatique si connexion lente."""
     try:
         timeout = aiohttp.ClientTimeout(total=TIMEOUT_SECONDES)
         async with session.get(url, timeout=timeout) as resp:
@@ -127,7 +91,7 @@ async def telecharger_image(session, url, nom_fichier, tentative=1):
             elif resp.status == 403:
                 print(f"❌ ERREUR RÉSEAU [{nom_fichier}] : Accès refusé par Discord (lien expiré) — tentative {tentative}/{MAX_RETRIES}")
             elif resp.status == 404:
-                print(f"❌ ERREUR RÉSEAU [{nom_fichier}] : Image introuvable sur les serveurs Discord (404) — tentative {tentative}/{MAX_RETRIES}")
+                print(f"❌ ERREUR RÉSEAU [{nom_fichier}] : Image introuvable sur les serveurs Discord — tentative {tentative}/{MAX_RETRIES}")
             else:
                 print(f"❌ ERREUR RÉSEAU [{nom_fichier}] : Code HTTP inattendu {resp.status} — tentative {tentative}/{MAX_RETRIES}")
             return None
@@ -138,9 +102,8 @@ async def telecharger_image(session, url, nom_fichier, tentative=1):
             print(f"🔄 Nouvelle tentative dans 3 secondes...")
             await asyncio.sleep(3)
             return await telecharger_image(session, url, nom_fichier, tentative + 1)
-        else:
-            print(f"❌ ABANDON [{nom_fichier}] : {MAX_RETRIES} tentatives échouées (WiFi trop lent ou instable)")
-            return None
+        print(f"❌ ABANDON [{nom_fichier}] : {MAX_RETRIES} tentatives échouées (WiFi trop lent ou instable)")
+        return None
 
     except aiohttp.ClientConnectorError as e:
         print(f"❌ ERREUR CONNEXION [{nom_fichier}] : Impossible de contacter Discord → {e} — tentative {tentative}/{MAX_RETRIES}")
@@ -174,9 +137,11 @@ async def on_message(message):
 
     print(f"📨 Message de {message.author} ({message.author.id}) | {len(message.attachments)} pièce(s) jointe(s)")
 
+    EXTENSIONS_IMAGES = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif", ".bmp", ".tiff"}
     images = [
         a for a in message.attachments
-        if a.content_type and a.content_type.startswith("image/")
+        if (a.content_type and a.content_type.startswith("image/"))
+        or any(a.filename.lower().endswith(ext) for ext in EXTENSIONS_IMAGES)
     ]
 
     if not images:
@@ -195,7 +160,6 @@ async def on_message(message):
             for attachment in images:
                 print(f"⬇️ Téléchargement de {attachment.filename} ({attachment.size // 1024} Ko)...")
 
-                # Vérification taille fichier
                 if attachment.size > 25 * 1024 * 1024:
                     msg = f"ERREUR TAILLE [{attachment.filename}] : fichier trop lourd ({attachment.size // 1024 // 1024} Mo) — limite Discord : 25 Mo"
                     print(f"❌ {msg}")
@@ -209,13 +173,13 @@ async def on_message(message):
                     continue
 
                 try:
-                    watermarked = add_watermark(image_data)
+                    traite = add_logo(image_data)
                     filename = f"dlp_{attachment.filename.rsplit('.', 1)[0]}.jpg"
-                    files_to_send.append(discord.File(io.BytesIO(watermarked), filename=filename))
-                    print(f"✅ Filigrane appliqué sur {attachment.filename}")
+                    files_to_send.append(discord.File(io.BytesIO(traite), filename=filename))
+                    print(f"✅ Logo appliqué sur {attachment.filename}")
 
                 except Image.UnidentifiedImageError:
-                    msg = f"ERREUR FORMAT [{attachment.filename}] : format d'image non reconnu (pas un JPG/PNG/WEBP valide)"
+                    msg = f"ERREUR FORMAT [{attachment.filename}] : format non reconnu (pas un JPG/PNG/WEBP valide)"
                     print(f"❌ {msg}")
                     erreurs.append(msg)
 
@@ -230,10 +194,9 @@ async def on_message(message):
                     traceback.print_exc()
                     erreurs.append(msg)
 
-        # ── Réponse finale ──
         if files_to_send and not erreurs:
             await message.reply(
-                f"✅ **{len(files_to_send)} photo(s)** avec filigrane DLP WORKS !",
+                f"✅ **{len(files_to_send)} photo(s)** avec logo DLP WORKS !",
                 files=files_to_send
             )
         elif files_to_send and erreurs:
@@ -254,7 +217,7 @@ async def on_message(message):
     except discord.HTTPException as e:
         print(f"❌ ERREUR DISCORD : impossible d'envoyer la réponse → code {e.status} : {e.text}")
         try:
-            await message.reply("⚠️ Erreur lors de l'envoi de la photo. Le fichier est peut-être trop lourd pour Discord.")
+            await message.reply("⚠️ Erreur lors de l'envoi. Le fichier est peut-être trop lourd pour Discord.")
         except:
             pass
 
