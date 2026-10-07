@@ -39,17 +39,21 @@ def add_logo(image_bytes: bytes) -> bytes:
     img = img_original.convert("RGBA")
     width, height = img.size
 
-    # ── LOGO BAS DROITE ──
+        # ── LOGO BAS DROITE ──
     if os.path.exists(LOGO_FILE):
         try:
-            logo = Image.open(LOGO_FILE).convert("RGBA")
+            logo_original = Image.open(LOGO_FILE).convert("RGBA")
+            
+            # Convertir le logo en sRGB standard pour éviter le décalage couleur
+            logo_original = logo_original.convert("RGB").convert("RGBA")
+            
             logo_width = int(width * LOGO_SIZE_PERCENT / 100)
-            logo_ratio = logo_width / logo.size[0]
-            logo_height = int(logo.size[1] * logo_ratio)
-            logo = logo.resize((logo_width, logo_height), Image.LANCZOS)
+            logo_ratio = logo_width / logo_original.size[0]
+            logo_height = int(logo_original.size[1] * logo_ratio)
+            logo_resized = logo_original.resize((logo_width, logo_height), Image.LANCZOS)
             pos_x = width - logo_width - LOGO_MARGIN
             pos_y = height - logo_height - LOGO_MARGIN
-            img.paste(logo, (pos_x, pos_y), logo)
+            img.paste(logo_resized, (pos_x, pos_y), logo_resized)
         except FileNotFoundError:
             print("⚠️ ERREUR LOGO : fichier logo.png introuvable")
         except Exception as e:
